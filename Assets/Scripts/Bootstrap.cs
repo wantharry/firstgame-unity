@@ -135,6 +135,9 @@ public static class Bootstrap
         anim.leftHand = leftHand;
         anim.rightHand = rightHand;
 
+        // Scale the whole character down 30% so it fits through interior doors.
+        root.transform.localScale = Vector3.one * 0.7f;
+
         return root;
     }
 
@@ -208,7 +211,7 @@ public static class Bootstrap
             CreateTexturedTree(world.transform, treePositions[i], scale, pineTree ? pine : leaf, bark, pineTree, i);
         }
 
-        CreateCabin(world.transform, new Vector3(-10.5f, 0f, 3.3f), 25f, plaster, roofRed, wood);
+        CreateCountryHouse(world.transform, new Vector3(-10.5f, 0f, 3.3f), 25f, plaster, roofRed, wood);
         CreateCabin(world.transform, new Vector3(10.5f, 0f, -4.8f), -18f, new Color(0.52f, 0.58f, 0.48f), new Color(0.16f, 0.17f, 0.18f), wood);
 
         Vector3[] rockPositions =
@@ -471,6 +474,43 @@ public static class Bootstrap
         }
     }
 
+    static void CreateCountryHouse(Transform parent, Vector3 position, float yRotation, Color wallColor, Color roofColor, Color trimColor)
+    {
+        // Try the Furnished Cabin asset first
+        GameObject housePrefab = LoadPrefab("Assets/FurnishedCabin/Prefabs/PFB_Building_Full.prefab");
+        if (housePrefab == null)
+        {
+            // Fall back to procedural cabin if prefab not found
+            CreateCabin(parent, position, yRotation, wallColor, roofColor, trimColor);
+            return;
+        }
+
+        var house = Object.Instantiate(housePrefab, parent);
+        house.name = "Furnished Cabin";
+        house.transform.position = position;
+        house.transform.rotation = Quaternion.Euler(0f, yRotation, 0f);
+        house.transform.localScale = Vector3.one * 0.85f;
+
+        // Add an invisible door trigger at the cabin's front entrance
+        var door = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        door.name = "Cabin Door Interaction";
+        door.transform.SetParent(house.transform, false);
+        door.transform.localPosition = new Vector3(0f, 1.6f, 3.6f);
+        door.transform.localScale = new Vector3(1.5f, 2.8f, 0.3f);
+        var doorRenderer = door.GetComponent<Renderer>();
+        if (doorRenderer != null)
+            doorRenderer.enabled = false;
+        door.AddComponent<OpenableDoor>();
+    }
+
+    static GameObject LoadPrefab(string assetPath)
+    {
+#if UNITY_EDITOR
+        return UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+#else
+        return null;
+#endif
+    }
     static void CreateCabin(Transform parent, Vector3 position, float yRotation, Color wallColor, Color roofColor, Color trimColor)
     {
         var cabin = new GameObject("Detailed Cabin");
@@ -487,8 +527,9 @@ public static class Bootstrap
         MakeWorldPart(PrimitiveType.Cube, cabin.transform, new Vector3(1.15f, 2.95f, -0.6f),
                       new Vector3(0.42f, 0.9f, 0.42f), new Color(0.20f, 0.20f, 0.18f), "Chimney");
 
-        MakeWorldPart(PrimitiveType.Cube, cabin.transform, new Vector3(0f, 0.62f, 1.54f),
-                      new Vector3(0.72f, 1.22f, 0.08f), trimColor, "Wood Door");
+        var door = MakeWorldPart(PrimitiveType.Cube, cabin.transform, new Vector3(0f, 0.62f, 1.54f),
+                      new Vector3(0.72f, 1.22f, 0.08f), trimColor, "Locked House Door");
+        door.AddComponent<OpenableDoor>();
         MakeWorldPart(PrimitiveType.Sphere, cabin.transform, new Vector3(0.24f, 0.62f, 1.60f),
                       new Vector3(0.06f, 0.06f, 0.025f), new Color(0.95f, 0.75f, 0.18f), "Door Knob");
 
@@ -677,11 +718,13 @@ public class FirstPersonCamera : MonoBehaviour
     public float pitchLimit = 78f;
 
     private float pitch;
+    private GameObject handRoot;
 
     void Start()
     {
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
+        BuildHeldItemView();
     }
 
     void LateUpdate()
@@ -698,15 +741,155 @@ public class FirstPersonCamera : MonoBehaviour
 
         transform.position = target.TransformPoint(eyeOffset);
         transform.rotation = target.rotation * Quaternion.Euler(pitch, 0f, 0f);
+
+        if (handRoot != null)
+            handRoot.SetActive(GameManager.Instance != null && GameManager.Instance.HasKey);
+
+        TryInteractWithDoor();
+    }
+
+
+    void TryInteractWithDoor()
+    {
+        // Show hint when near a door
+        var nearby = Physics.OverlapSphere(transform.position, 5f);
+        OpenableDoor nearDoor = null;
+        foreach (var c in nearby)
+        {
+            var d = c.GetComponentInParent<OpenableDoor>();
+            if (d != null) { nearDoor = d; break; }
+        }
+        if (nearDoor != null && GameManager.Instance != null && !nearDoor.IsOpen)
+        {
+            if (GameManager.Instance.HasKey)
+                GameManager.Instance.ShowMessage("Left-click to open the door.");
+            else
+                GameManager.Instance.ShowMessage("The door is locked. Find the key first.");
+        }
+
+        var mouse = Mouse.current;
+        if (mouse == null || !mouse.leftButton.wasPressedThisFrame)
+            return;
+
+        if (nearDoor == null) return;
+
+        if (GameManager.Instance == null || !GameManager.Instance.HasKey)
+            return;
+
+        nearDoor.Open();
+        GameManager.Instance.UseKey();
+    }
+    void BuildHeldItemView()
+    {
+        handRoot = new GameObject("First Person Held Key");
+        handRoot.transform.SetParent(transform, false);
+        handRoot.transform.localPosition = new Vector3(0.48f, -0.38f, 0.72f);
+        handRoot.transform.localRotation = Quaternion.Euler(12f, -24f, 8f);
+        handRoot.transform.localScale = Vector3.one * 0.42f;
+        handRoot.SetActive(false);
+
+        Color skin = new Color(1f, 0.76f, 0.56f);
+        Color gold = new Color(1f, 0.78f, 0.12f);
+        Color darkGold = new Color(0.72f, 0.45f, 0.06f);
+
+        var hand = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        hand.name = "Visible Hand";
+        hand.transform.SetParent(handRoot.transform, false);
+        hand.transform.localPosition = new Vector3(0f, -0.08f, 0f);
+        hand.transform.localScale = new Vector3(0.34f, 0.22f, 0.26f);
+        hand.GetComponent<Renderer>().material.color = skin;
+        Object.Destroy(hand.GetComponent<Collider>());
+
+        var ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        ring.name = "Held Key Ring";
+        ring.transform.SetParent(handRoot.transform, false);
+        ring.transform.localPosition = new Vector3(-0.2f, 0.2f, 0.05f);
+        ring.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+        ring.transform.localScale = new Vector3(0.2f, 0.035f, 0.2f);
+        ring.GetComponent<Renderer>().material.color = gold;
+        Object.Destroy(ring.GetComponent<Collider>());
+
+        var shaft = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        shaft.name = "Held Key Shaft";
+        shaft.transform.SetParent(handRoot.transform, false);
+        shaft.transform.localPosition = new Vector3(0.24f, 0.2f, 0.05f);
+        shaft.transform.localScale = new Vector3(0.62f, 0.08f, 0.08f);
+        shaft.GetComponent<Renderer>().material.color = gold;
+        Object.Destroy(shaft.GetComponent<Collider>());
+
+        var toothA = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        toothA.name = "Held Key Tooth";
+        toothA.transform.SetParent(handRoot.transform, false);
+        toothA.transform.localPosition = new Vector3(0.55f, 0.08f, 0.05f);
+        toothA.transform.localScale = new Vector3(0.12f, 0.22f, 0.08f);
+        toothA.GetComponent<Renderer>().material.color = darkGold;
+        Object.Destroy(toothA.GetComponent<Collider>());
+
+        var toothB = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        toothB.name = "Held Key Tooth";
+        toothB.transform.SetParent(handRoot.transform, false);
+        toothB.transform.localPosition = new Vector3(0.38f, 0.1f, 0.05f);
+        toothB.transform.localScale = new Vector3(0.1f, 0.16f, 0.08f);
+        toothB.GetComponent<Renderer>().material.color = darkGold;
+        Object.Destroy(toothB.GetComponent<Collider>());
     }
 }
 
+// Attached to a door object. Call Open() to swing it open.
+// Optionally assign doorPivots — otherwise rotates its own transform.
+public class OpenableDoor : MonoBehaviour
+{
+    // Filled at spawn time with the actual door mesh pivots to rotate.
+    public Transform[] doorPivots;
 
+    public bool IsOpen => isOpen;
+    bool isOpen = false;
+    float currentAngle = 0f;
+    const float openAngle = 90f;
+    const float animSpeed = 150f; // degrees per second
 
+    public void Open()
+    {
+        if (isOpen) return;
+        isOpen = true;
 
+        // Disable our own collider so the player can walk through.
+        var col = GetComponent<Collider>();
+        if (col != null) col.enabled = false;
 
+        // If no pivots were supplied, try to find door children automatically.
+        if (doorPivots == null || doorPivots.Length == 0)
+            doorPivots = FindDoorPivots();
+    }
 
+    Transform[] FindDoorPivots()
+    {
+        // Search the cabin root (two levels up from this trigger) for door pivots.
+        Transform root = transform.parent != null ? transform.parent : transform;
+        var found = new System.Collections.Generic.List<Transform>();
+        FindNamed(root, new[] { "leftDoor", "rightDoor", "grp_doorL", "grp_doorR" }, found);
+        // If nothing found, fall back to rotating ourselves.
+        if (found.Count == 0) found.Add(transform);
+        return found.ToArray();
+    }
 
+    void FindNamed(Transform t, string[] names, System.Collections.Generic.List<Transform> results)
+    {
+        foreach (string n in names)
+            if (t.name == n) { results.Add(t); return; }
+        for (int i = 0; i < t.childCount; i++)
+            FindNamed(t.GetChild(i), names, results);
+    }
 
-
-
+    void Update()
+    {
+        if (!isOpen || doorPivots == null) return;
+        currentAngle = Mathf.MoveTowards(currentAngle, openAngle, animSpeed * Time.deltaTime);
+        foreach (var pivot in doorPivots)
+        {
+            if (pivot == null) continue;
+            var e = pivot.localEulerAngles;
+            pivot.localEulerAngles = new Vector3(e.x, currentAngle, e.z);
+        }
+    }
+}

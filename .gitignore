@@ -58,3 +58,7 @@ Desktop.ini
 
 # Unity sync temp files
 ~UnityDirMonSyncFile~*
+
+# Large asset store packages (source-of-truth is Unity Asset Store)
+Assets/FurnishedCabin/
+Assets/FurnishedCabin.meta

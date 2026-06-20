@@ -8,6 +8,8 @@ public class GameManager : MonoBehaviour
 {
     public static GameManager Instance;
 
+    public bool HasKey => hasKey;
+
     private int score = 0;
     private int totalCoins = 0;
     private bool keySpawned = false;
@@ -95,6 +97,12 @@ public class GameManager : MonoBehaviour
         UpdateInventory();
     }
 
+    public void UseKey()
+    {
+        hasKey = false;
+        UpdateInventory();
+    }
+
     void UpdateInventory()
     {
         if (inventoryLabel == null) return;
@@ -104,6 +112,12 @@ public class GameManager : MonoBehaviour
             keySlot.color = hasKey ? new Color(1f, 0.78f, 0.12f, 0.95f) : new Color(0f, 0f, 0f, 0.38f);
         if (keySlotLabel != null)
             keySlotLabel.text = hasKey ? "Key" : "";
+    }
+
+    public void ShowMessage(string message)
+    {
+        if (label != null)
+            label.text = message;
     }
 
     void UpdateLabel()
@@ -187,6 +201,34 @@ public class GameManager : MonoBehaviour
         keyLabelRt.anchorMax = Vector2.one;
         keyLabelRt.offsetMin = Vector2.zero;
         keyLabelRt.offsetMax = Vector2.zero;
+
+        // --- Crosshair ---
+        var crosshairGO = new GameObject("Crosshair");
+        crosshairGO.transform.SetParent(canvasGO.transform, false);
+
+        // Horizontal bar
+        var hBar = new GameObject("Crosshair H");
+        hBar.transform.SetParent(crosshairGO.transform, false);
+        var hImg = hBar.AddComponent<Image>();
+        hImg.color = new Color(1f, 1f, 1f, 0.85f);
+        var hRt = hImg.rectTransform;
+        hRt.anchorMin = new Vector2(0.5f, 0.5f);
+        hRt.anchorMax = new Vector2(0.5f, 0.5f);
+        hRt.pivot = new Vector2(0.5f, 0.5f);
+        hRt.anchoredPosition = Vector2.zero;
+        hRt.sizeDelta = new Vector2(20f, 2f);
+
+        // Vertical bar
+        var vBar = new GameObject("Crosshair V");
+        vBar.transform.SetParent(crosshairGO.transform, false);
+        var vImg = vBar.AddComponent<Image>();
+        vImg.color = new Color(1f, 1f, 1f, 0.85f);
+        var vRt = vImg.rectTransform;
+        vRt.anchorMin = new Vector2(0.5f, 0.5f);
+        vRt.anchorMax = new Vector2(0.5f, 0.5f);
+        vRt.pivot = new Vector2(0.5f, 0.5f);
+        vRt.anchoredPosition = Vector2.zero;
+        vRt.sizeDelta = new Vector2(2f, 20f);
     }
 }
 public class KeyPickup : MonoBehaviour
