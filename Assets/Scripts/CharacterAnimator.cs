@@ -14,6 +14,7 @@ public class CharacterAnimator : MonoBehaviour
     public float swingAngle = 38f;
     [Tooltip("How fast the character turns to face its direction.")]
     public float turnSpeed = 12f;
+    public bool rotateToMovement = true;
     [Tooltip("How much the body leans into movement, in degrees.")]
     public float leanAngle = 9f;
 
@@ -49,7 +50,7 @@ public class CharacterAnimator : MonoBehaviour
         float runAmount = Mathf.InverseLerp(0.05f, 5.5f, speed);
 
         // Face the direction of travel.
-        if (speed > 0.1f)
+        if (rotateToMovement && speed > 0.1f)
         {
             Quaternion target = Quaternion.LookRotation(moveDir.normalized, Vector3.up);
             transform.rotation = Quaternion.Slerp(transform.rotation, target, Time.deltaTime * turnSpeed);
@@ -105,3 +106,4 @@ public class CharacterAnimator : MonoBehaviour
         if (hand != null) hand.localRotation = Quaternion.Euler(angle, 0f, 0f);
     }
 }
+

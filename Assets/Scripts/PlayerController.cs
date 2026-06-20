@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.InputSystem;
 
 // Moves the player character around using physics forces, and feeds its
@@ -35,11 +35,19 @@ public class PlayerController : MonoBehaviour
             if (kb.sKey.isPressed || kb.downArrowKey.isPressed)  v -= 1f;
         }
 
-        Vector3 force = new Vector3(h, 0f, v).normalized * speed;
+        Vector3 input = new Vector3(h, 0f, v).normalized;
+        Vector3 forward = transform.forward;
+        Vector3 right = transform.right;
+        forward.y = 0f;
+        right.y = 0f;
+        forward.Normalize();
+        right.Normalize();
+
+        Vector3 force = (right * input.x + forward * input.z).normalized * speed;
         rb.AddForce(force);
 
         // Hand the current planar movement to the animator so the character
-        // can face its direction and swing its limbs.
+        // can swing its limbs while the first-person camera owns facing.
         if (anim != null)
             anim.SetMovement(new Vector3(rb.linearVelocity.x, 0f, rb.linearVelocity.z));
     }

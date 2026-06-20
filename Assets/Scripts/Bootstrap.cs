@@ -1,4 +1,5 @@
 ﻿using UnityEngine;
+using UnityEngine.InputSystem;
 
 // Builds the entire playable level from scratch when the game starts,
 // so you can just press Play with no manual scene setup.
@@ -45,7 +46,7 @@ public static class Bootstrap
         var gm = new GameObject("GameManager");
         gm.AddComponent<GameManager>();
 
-        // --- Follow camera ---
+        // --- First-person camera ---
         var cam = Camera.main;
         if (cam == null)
         {
@@ -53,10 +54,14 @@ public static class Bootstrap
             camGO.tag = "MainCamera";
             cam = camGO.AddComponent<Camera>();
         }
-        var follow = cam.gameObject.AddComponent<CameraFollow>();
-        follow.target = player.transform;
-        cam.transform.position = new Vector3(0f, 14f, -12f);
-        cam.transform.rotation = Quaternion.Euler(45f, 0f, 0f);
+        cam.nearClipPlane = 0.03f;
+        cam.fieldOfView = 72f;
+        var firstPerson = cam.gameObject.AddComponent<FirstPersonCamera>();
+        firstPerson.target = player.transform;
+
+        var anim = player.GetComponent<CharacterAnimator>();
+        if (anim != null)
+            anim.rotateToMovement = false;
     }
 
     // Builds a simple platform-hero figure from primitives: red cap/shirt,
@@ -308,25 +313,41 @@ public static class Bootstrap
     }
 }
 
-// Smoothly trails the player character, keeping a fixed offset.
-public class CameraFollow : MonoBehaviour
+// Mouse-look first-person camera mounted on the player.
+public class FirstPersonCamera : MonoBehaviour
 {
     public Transform target;
-    private Vector3 offset;
+    public Vector3 eyeOffset = new Vector3(0f, 1.55f, 0.22f);
+    public float mouseSensitivity = 0.12f;
+    public float pitchLimit = 78f;
+
+    private float pitch;
 
     void Start()
     {
-        if (target != null)
-            offset = transform.position - target.position;
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
     }
 
     void LateUpdate()
     {
         if (target == null) return;
-        Vector3 desired = target.position + offset;
-        transform.position = Vector3.Lerp(transform.position, desired, 0.1f);
+
+        var mouse = Mouse.current;
+        if (mouse != null)
+        {
+            Vector2 delta = mouse.delta.ReadValue();
+            target.Rotate(Vector3.up, delta.x * mouseSensitivity, Space.World);
+            pitch = Mathf.Clamp(pitch - delta.y * mouseSensitivity, -pitchLimit, pitchLimit);
+        }
+
+        transform.position = target.TransformPoint(eyeOffset);
+        transform.rotation = target.rotation * Quaternion.Euler(pitch, 0f, 0f);
     }
 }
+
+
+
 
 
 
