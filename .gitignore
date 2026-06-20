@@ -60,5 +60,8 @@ Desktop.ini
 ~UnityDirMonSyncFile~*
 
 # Large asset store packages (source-of-truth is Unity Asset Store)
+# See ASSETS.md for the full list and re-import instructions
 Assets/FurnishedCabin/
 Assets/FurnishedCabin.meta
+Assets/ALP_Assets/
+Assets/ALP_Assets.meta
