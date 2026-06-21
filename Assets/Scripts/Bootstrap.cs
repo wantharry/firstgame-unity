@@ -1,5 +1,6 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 
 // Builds the entire playable level from scratch when the game starts,
 // so you can just press Play with no manual scene setup.
@@ -7,10 +8,39 @@ using UnityEngine.InputSystem;
 // It spawns: a ground plane, a Mario-style runner character (runs with
 // WASD/arrows), a ring of spinning coins, a GameManager (score HUD), a
 // light, and a follow camera. Everything is wired up automatically.
-public static class Bootstrap
+public class Bootstrap : MonoBehaviour
 {
+    const int FirstPersonHiddenLayer = 31;
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void BuildLevel()
+    {
+        // Always start gameplay in the intended scene.
+        // If Play is launched from another scene (for example Demo),
+        // jump to SampleScene first, then build the runtime level once
+        // that scene has finished loading.
+        if (SceneManager.GetActiveScene().name != "SampleScene")
+        {
+            SceneManager.sceneLoaded += OnSampleSceneLoaded;
+            SceneManager.LoadScene("SampleScene");
+            return;
+        }
+
+        Build();
+    }
+
+    // Runs after a deferred load of SampleScene (when Play was started from
+    // another scene). RuntimeInitializeOnLoadMethod only fires once at startup,
+    // so we rely on this callback to build the level after the scene swap.
+    static void OnSampleSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        if (scene.name != "SampleScene")
+            return;
+
+        SceneManager.sceneLoaded -= OnSampleSceneLoaded;
+        Build();
+    }
+
+    static void Build()
     {
         // --- World lighting setup ---
         RenderSettings.fog = true;
@@ -29,6 +59,7 @@ public static class Bootstrap
 
         // --- Player character (Mario-style runner) ---
         var player = BuildCharacter(new Vector3(0f, 0f, 0f));
+        HidePlayerVisualsFromCamera(player);
 
         // --- Coins in a ring around the player ---
         int coinCount = 8;
@@ -52,6 +83,7 @@ public static class Bootstrap
             camGO.tag = "MainCamera";
             cam = camGO.AddComponent<Camera>();
         }
+        cam.cullingMask &= ~(1 << FirstPersonHiddenLayer);
         cam.nearClipPlane = 0.03f;
         cam.fieldOfView = 72f;
         var firstPerson = cam.gameObject.AddComponent<FirstPersonCamera>();
@@ -62,6 +94,20 @@ public static class Bootstrap
             anim.rotateToMovement = false;
     }
 
+    static void HidePlayerVisualsFromCamera(GameObject player)
+    {
+        SetVisualChildrenLayer(player.transform, FirstPersonHiddenLayer);
+    }
+
+    static void SetVisualChildrenLayer(Transform root, int layer)
+    {
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform child = root.GetChild(i);
+            child.gameObject.layer = layer;
+            SetVisualChildrenLayer(child, layer);
+        }
+    }
     // Builds a simple platform-hero figure from primitives: red cap/shirt,
     // blue overalls, gloves and shoes. The root carries physics and the
     // visual child pivots are animated by CharacterAnimator.
@@ -226,6 +272,7 @@ public static class Bootstrap
             var rock = MakeWorldPart(PrimitiveType.Sphere, world.transform, rockPositions[i],
                                      new Vector3(0.75f + i * 0.03f, 0.28f, 0.55f), stone, "Mossy Rock");
             rock.transform.rotation = Quaternion.Euler(0f, i * 33f, 0f);
+            rock.AddComponent<PickupStone>();
             MakeWorldPart(PrimitiveType.Sphere, rock.transform, new Vector3(0.15f, 0.28f, 0.05f),
                           new Vector3(0.45f, 0.06f, 0.35f), new Color(0.10f, 0.28f, 0.10f), "Moss Patch");
         }
@@ -491,18 +538,201 @@ public static class Bootstrap
         house.transform.rotation = Quaternion.Euler(0f, yRotation, 0f);
         house.transform.localScale = Vector3.one * 0.85f;
 
-        // Add an invisible door trigger at the cabin's front entrance
-        var door = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        door.name = "Cabin Door Interaction";
-        door.transform.SetParent(house.transform, false);
-        door.transform.localPosition = new Vector3(0f, 1.6f, 3.6f);
-        door.transform.localScale = new Vector3(1.5f, 2.8f, 0.3f);
-        var doorRenderer = door.GetComponent<Renderer>();
-        if (doorRenderer != null)
-            doorRenderer.enabled = false;
-        door.AddComponent<OpenableDoor>();
+        SetupFurnishedCabinEntranceDoor(house);
+        SetupFurnishedCabinHideSpots(house);
+        PlaceCreepInFurnishedCabinBedroom(house);
     }
 
+    static void PlaceCreepInFurnishedCabinBedroom(GameObject house)
+    {
+        GameObject creepPrefab = LoadPrefab("Assets/Creep Horror Creature/Prefabs/Creep1.prefab");
+        if (creepPrefab == null)
+            return;
+
+        Transform bed = FindDeepChildContaining(house.transform, "PFB_Bed");
+        if (bed == null)
+            bed = FindDeepChildContaining(house.transform, "BedBase");
+        if (bed == null)
+            return;
+
+        var creep = Object.Instantiate(creepPrefab, house.transform);
+        creep.name = "Bedroom Creep";
+
+        Vector3 spawn = bed.position - house.transform.right * 1.05f + house.transform.forward * 0.45f;
+        spawn.y = bed.position.y;
+        creep.transform.position = spawn;
+
+        Vector3 lookTarget = new Vector3(bed.position.x, spawn.y, bed.position.z);
+        Vector3 lookDir = (lookTarget - spawn).normalized;
+        if (lookDir.sqrMagnitude > 0.001f)
+            creep.transform.rotation = Quaternion.LookRotation(lookDir, Vector3.up);
+    }
+
+
+    static void SetupFurnishedCabinEntranceDoor(GameObject house)
+    {
+        var doorRoots = new System.Collections.Generic.List<Transform>();
+        FindDeepChildren(house.transform, "PFB_DoorSingle_Open", doorRoots);
+        FindDeepChildren(house.transform, "PFB_DoorSingle_Open (1)", doorRoots);
+
+        if (doorRoots.Count == 0)
+        {
+            Debug.LogWarning("Could not find the furnished cabin entrance door.");
+            return;
+        }
+
+        foreach (Transform doorRoot in doorRoots)
+            SetupFurnishedCabinDoor(doorRoot);
+    }
+
+    static void SetupFurnishedCabinDoor(Transform doorRoot)
+    {
+        var door = doorRoot.gameObject.GetComponent<OpenableDoor>();
+        if (door == null)
+            door = doorRoot.gameObject.AddComponent<OpenableDoor>();
+
+        var animator = doorRoot.GetComponent<Animator>();
+        if (animator != null)
+            animator.enabled = false;
+
+        Transform doorMesh = FindDeepChild(doorRoot, "DoorSingle");
+        door.doorPivots = doorMesh != null
+            ? new[] { doorMesh }
+            : new[] { doorRoot };
+        door.collidersToDisable = doorRoot.GetComponentsInChildren<Collider>();
+        door.renderersToHide = doorRoot.GetComponentsInChildren<Renderer>();
+
+        var col = doorRoot.GetComponent<BoxCollider>();
+        if (col != null)
+        {
+            col.enabled = true;
+            col.isTrigger = true;
+            col.size = new Vector3(1.8f, 2.8f, 3.2f);
+            col.center = new Vector3(0.6f, 1.2f, 0f);
+        }
+
+        var clickZone = new GameObject("Furnished Cabin Door Click Zone");
+        clickZone.transform.SetParent(doorRoot, false);
+        clickZone.transform.localPosition = new Vector3(0.6f, 1.2f, 0f);
+        clickZone.transform.localRotation = Quaternion.identity;
+        clickZone.transform.localScale = Vector3.one;
+        var zoneCollider = clickZone.AddComponent<BoxCollider>();
+        zoneCollider.isTrigger = true;
+        zoneCollider.size = new Vector3(2.2f, 3f, 3.6f);
+        var zoneDoor = clickZone.AddComponent<OpenableDoor>();
+        zoneDoor.doorPivots = door.doorPivots;
+        zoneDoor.collidersToDisable = door.collidersToDisable;
+        zoneDoor.renderersToHide = door.renderersToHide;
+    }
+
+    static void SetupFurnishedCabinHideSpots(GameObject house)
+    {
+        int created = 0;
+        Transform[] allChildren = house.GetComponentsInChildren<Transform>();
+        foreach (Transform child in allChildren)
+        {
+            if (child == null || !IsHideSpotFurniture(child.name))
+                continue;
+
+            CreateHideSpot(child);
+            created++;
+        }
+
+        if (created == 0)
+            Debug.LogWarning("No bed or closet hide spots were found in the furnished cabin.");
+    }
+
+    static bool IsHideSpotFurniture(string objectName)
+    {
+        string lowerName = objectName.ToLowerInvariant();
+        return lowerName.Contains("pfb_bed") ||
+               lowerName.Contains("bedbase") ||
+               lowerName.Contains("pfb_closet") ||
+               lowerName.Contains("closet") ||
+               lowerName.Contains("wardrobe") ||
+               lowerName.Contains("chestofdraws");
+    }
+
+    static void CreateHideSpot(Transform furniture)
+    {
+        var zone = new GameObject("Hide Spot - " + furniture.name);
+        zone.transform.SetParent(furniture, false);
+        zone.transform.localPosition = Vector3.zero;
+        zone.transform.localRotation = Quaternion.identity;
+        zone.transform.localScale = Vector3.one;
+
+        var collider = zone.AddComponent<BoxCollider>();
+        collider.isTrigger = true;
+        collider.size = GetHideSpotSize(furniture.name);
+        collider.center = GetHideSpotCenter(furniture.name);
+
+        var hideSpot = zone.AddComponent<HideSpot>();
+        hideSpot.hideType = GetHideSpotType(furniture.name);
+        hideSpot.exitOffset = new Vector3(0f, 0f, -1.2f);
+    }
+
+    static Vector3 GetHideSpotSize(string objectName)
+    {
+        string lowerName = objectName.ToLowerInvariant();
+        if (lowerName.Contains("closet") || lowerName.Contains("wardrobe") || lowerName.Contains("chestofdraws"))
+            return new Vector3(1.4f, 2.2f, 1.4f);
+        return new Vector3(2.4f, 0.9f, 2f);
+    }
+
+    static Vector3 GetHideSpotCenter(string objectName)
+    {
+        string lowerName = objectName.ToLowerInvariant();
+        if (lowerName.Contains("closet") || lowerName.Contains("wardrobe") || lowerName.Contains("chestofdraws"))
+            return new Vector3(0f, 1f, 0f);
+        return new Vector3(0f, 0.25f, 0f);
+    }
+
+    static HideSpotType GetHideSpotType(string objectName)
+    {
+        string lowerName = objectName.ToLowerInvariant();
+        if (lowerName.Contains("closet") || lowerName.Contains("wardrobe") || lowerName.Contains("chestofdraws"))
+            return HideSpotType.Inside;
+        return HideSpotType.Under;
+    }
+
+    static void FindDeepChildren(Transform root, string childName, System.Collections.Generic.List<Transform> results)
+    {
+        if (root.name == childName)
+            results.Add(root);
+
+        for (int i = 0; i < root.childCount; i++)
+            FindDeepChildren(root.GetChild(i), childName, results);
+    }
+
+    static Transform FindDeepChild(Transform root, string childName)
+    {
+        if (root.name == childName)
+            return root;
+
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform found = FindDeepChild(root.GetChild(i), childName);
+            if (found != null)
+                return found;
+        }
+
+        return null;
+    }
+
+    static Transform FindDeepChildContaining(Transform root, string namePart)
+    {
+        if (root.name.IndexOf(namePart, System.StringComparison.OrdinalIgnoreCase) >= 0)
+            return root;
+
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform found = FindDeepChildContaining(root.GetChild(i), namePart);
+            if (found != null)
+                return found;
+        }
+
+        return null;
+    }
     static GameObject LoadPrefab(string assetPath)
     {
 #if UNITY_EDITOR
@@ -719,12 +949,20 @@ public class FirstPersonCamera : MonoBehaviour
 
     private float pitch;
     private GameObject handRoot;
+    private PickupStone heldStone;
+    private Transform holdPoint;
+    private HideSpot currentHideSpot;
+    private Rigidbody targetBody;
+    private bool targetWasKinematic;
 
     void Start()
     {
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
         BuildHeldItemView();
+        BuildHoldPoint();
+        if (target != null)
+            targetBody = target.GetComponent<Rigidbody>();
     }
 
     void LateUpdate()
@@ -743,41 +981,192 @@ public class FirstPersonCamera : MonoBehaviour
         transform.rotation = target.rotation * Quaternion.Euler(pitch, 0f, 0f);
 
         if (handRoot != null)
-            handRoot.SetActive(GameManager.Instance != null && GameManager.Instance.HasKey);
+            handRoot.SetActive(GameManager.Instance != null && GameManager.Instance.HasKey && heldStone == null);
 
+        TryInteractWithStone();
         TryInteractWithDoor();
+        TryInteractWithHideSpot();
     }
 
 
+    void BuildHoldPoint()
+    {
+        var holdGO = new GameObject("Stone Hold Point");
+        holdGO.transform.SetParent(transform, false);
+        holdGO.transform.localPosition = new Vector3(0.42f, -0.34f, 1.05f);
+        holdGO.transform.localRotation = Quaternion.identity;
+        holdPoint = holdGO.transform;
+    }
+
+    void TryInteractWithHideSpot()
+    {
+        var kb = Keyboard.current;
+        if (kb == null || !kb.eKey.wasPressedThisFrame)
+        {
+            ShowNearbyHideSpotHint();
+            return;
+        }
+
+        if (currentHideSpot != null)
+        {
+            ExitHideSpot();
+            return;
+        }
+
+        HideSpot spot = FindNearbyHideSpot();
+        if (spot != null)
+            EnterHideSpot(spot);
+    }
+
+    void ShowNearbyHideSpotHint()
+    {
+        if (currentHideSpot != null)
+        {
+            if (GameManager.Instance != null)
+                GameManager.Instance.ShowMessage("Press E to climb out.");
+            return;
+        }
+
+        HideSpot spot = FindNearbyHideSpot();
+        if (spot != null && GameManager.Instance != null)
+            GameManager.Instance.ShowMessage(spot.Prompt);
+    }
+
+    HideSpot FindNearbyHideSpot()
+    {
+        if (Physics.Raycast(transform.position, transform.forward, out RaycastHit hit, 3f, ~0, QueryTriggerInteraction.Collide))
+        {
+            HideSpot lookedAt = hit.collider.GetComponentInParent<HideSpot>();
+            if (lookedAt != null)
+                return lookedAt;
+        }
+
+        Collider[] nearby = Physics.OverlapSphere(transform.position, 2.2f, ~0, QueryTriggerInteraction.Collide);
+        HideSpot closest = null;
+        float closestDistance = 2.2f;
+        foreach (Collider col in nearby)
+        {
+            HideSpot spot = col.GetComponentInParent<HideSpot>();
+            if (spot == null) continue;
+
+            float distance = Vector3.Distance(transform.position, spot.HidePosition);
+            if (distance < closestDistance)
+            {
+                closest = spot;
+                closestDistance = distance;
+            }
+        }
+
+        return closest;
+    }
+
+    void EnterHideSpot(HideSpot spot)
+    {
+        currentHideSpot = spot;
+        if (targetBody != null)
+        {
+            targetWasKinematic = targetBody.isKinematic;
+            targetBody.linearVelocity = Vector3.zero;
+            targetBody.angularVelocity = Vector3.zero;
+            targetBody.isKinematic = true;
+        }
+
+        target.SetPositionAndRotation(spot.HidePosition, spot.HideRotation);
+        if (GameManager.Instance != null)
+            GameManager.Instance.ShowMessage(spot.HiddenMessage);
+    }
+
+    void ExitHideSpot()
+    {
+        HideSpot spot = currentHideSpot;
+        currentHideSpot = null;
+        if (spot != null)
+            target.position = spot.ExitPosition;
+
+        if (targetBody != null)
+            targetBody.isKinematic = targetWasKinematic;
+
+        if (GameManager.Instance != null)
+            GameManager.Instance.ShowMessage("You climbed out.");
+    }
+
+    void TryInteractWithStone()
+    {
+        var kb = Keyboard.current;
+        var mouse = Mouse.current;
+
+        if (heldStone != null)
+        {
+            heldStone.MoveHeld(holdPoint.position, holdPoint.rotation);
+
+            if ((mouse != null && mouse.leftButton.wasPressedThisFrame) ||
+                (kb != null && kb.qKey.wasPressedThisFrame))
+            {
+                heldStone.Throw(transform.forward * 11f + Vector3.up * 2.2f);
+                heldStone = null;
+                if (GameManager.Instance != null)
+                    GameManager.Instance.ShowMessage("Stone thrown.");
+            }
+            return;
+        }
+
+        if (kb == null || !kb.eKey.wasPressedThisFrame)
+            return;
+
+        if (Physics.Raycast(transform.position, transform.forward, out RaycastHit hit, 3.1f, ~0, QueryTriggerInteraction.Ignore))
+        {
+            var stone = hit.collider.GetComponentInParent<PickupStone>();
+            if (stone != null)
+            {
+                heldStone = stone;
+                heldStone.PickUp();
+                heldStone.MoveHeld(holdPoint.position, holdPoint.rotation);
+                if (GameManager.Instance != null)
+                    GameManager.Instance.ShowMessage("Stone picked up. Left-click to throw, Q to drop-throw.");
+            }
+        }
+    }
     void TryInteractWithDoor()
     {
-        // Show hint when near a door
-        var nearby = Physics.OverlapSphere(transform.position, 5f);
-        OpenableDoor nearDoor = null;
-        foreach (var c in nearby)
-        {
-            var d = c.GetComponentInParent<OpenableDoor>();
-            if (d != null) { nearDoor = d; break; }
-        }
+        OpenableDoor nearDoor = FindLookedAtDoor();
+        if (nearDoor == null)
+            nearDoor = OpenableDoor.FindNearest(transform.position, 7f);
+
         if (nearDoor != null && GameManager.Instance != null && !nearDoor.IsOpen)
         {
             if (GameManager.Instance.HasKey)
-                GameManager.Instance.ShowMessage("Left-click to open the door.");
+                GameManager.Instance.ShowMessage("Left-click or press E to open the door.");
             else
                 GameManager.Instance.ShowMessage("The door is locked. Find the key first.");
         }
 
         var mouse = Mouse.current;
-        if (mouse == null || !mouse.leftButton.wasPressedThisFrame)
+        var kb = Keyboard.current;
+        bool openPressed = (mouse != null && mouse.leftButton.wasPressedThisFrame) ||
+                           (kb != null && kb.eKey.wasPressedThisFrame);
+        if (!openPressed)
             return;
-
-        if (nearDoor == null) return;
 
         if (GameManager.Instance == null || !GameManager.Instance.HasKey)
             return;
 
-        nearDoor.Open();
-        GameManager.Instance.UseKey();
+        bool opened = OpenableDoor.ForceOpenFurnishedCabinDoors();
+        if (opened)
+            GameManager.Instance.UseKey();
+        if (GameManager.Instance != null)
+            GameManager.Instance.ShowMessage("Door opened.");
+    }
+
+    OpenableDoor FindLookedAtDoor()
+    {
+        if (Physics.Raycast(transform.position, transform.forward, out RaycastHit hit, 8f, ~0, QueryTriggerInteraction.Collide))
+        {
+            var door = hit.collider.GetComponentInParent<OpenableDoor>();
+            if (door != null)
+                return door;
+        }
+
+        return null;
     }
     void BuildHeldItemView()
     {
@@ -835,16 +1224,170 @@ public class FirstPersonCamera : MonoBehaviour
     }
 }
 
+public enum HideSpotType
+{
+    Under,
+    Inside
+}
+
+public class HideSpot : MonoBehaviour
+{
+    public HideSpotType hideType;
+    public Vector3 exitOffset = new Vector3(0f, 0f, -1.2f);
+
+    public string Prompt => hideType == HideSpotType.Inside ? "Press E to hide inside." : "Press E to hide under.";
+    public string HiddenMessage => hideType == HideSpotType.Inside ? "You are hiding inside. Press E to leave." : "You are hiding under it. Press E to crawl out.";
+
+    public Vector3 HidePosition
+    {
+        get
+        {
+            Vector3 localOffset = hideType == HideSpotType.Inside
+                ? new Vector3(0f, 0.7f, 0f)
+                : new Vector3(0f, 0.32f, 0f);
+            return transform.TransformPoint(localOffset);
+        }
+    }
+
+    public Quaternion HideRotation => transform.rotation;
+    public Vector3 ExitPosition => transform.TransformPoint(exitOffset);
+}
+
+public class PickupStone : MonoBehaviour
+{
+    private Rigidbody rb;
+    private Collider[] colliders;
+    private bool held;
+
+    void Awake()
+    {
+        rb = gameObject.AddComponent<Rigidbody>();
+        rb.mass = 1.4f;
+        rb.linearDamping = 0.15f;
+        rb.angularDamping = 0.35f;
+        rb.isKinematic = true;
+        colliders = GetComponentsInChildren<Collider>();
+    }
+
+    public void PickUp()
+    {
+        held = true;
+        rb.linearVelocity = Vector3.zero;
+        rb.angularVelocity = Vector3.zero;
+        rb.isKinematic = true;
+        foreach (var col in colliders)
+            col.enabled = false;
+    }
+
+    public void MoveHeld(Vector3 position, Quaternion rotation)
+    {
+        if (!held) return;
+        transform.SetPositionAndRotation(position, rotation);
+    }
+
+    public void Throw(Vector3 velocity)
+    {
+        held = false;
+        foreach (var col in colliders)
+            col.enabled = true;
+        rb.isKinematic = false;
+        rb.linearVelocity = velocity;
+        rb.angularVelocity = Random.insideUnitSphere * 8f;
+    }
+}
 // Attached to a door object. Call Open() to swing it open.
-// Optionally assign doorPivots — otherwise rotates its own transform.
+// Optionally assign doorPivots � otherwise rotates its own transform.
 public class OpenableDoor : MonoBehaviour
 {
+    static readonly System.Collections.Generic.List<OpenableDoor> allDoors = new System.Collections.Generic.List<OpenableDoor>();
+
+    void Awake()
+    {
+        if (!allDoors.Contains(this))
+            allDoors.Add(this);
+    }
+
+    void OnDestroy()
+    {
+        allDoors.Remove(this);
+    }
+
+    public static bool ForceOpenFurnishedCabinDoors()
+    {
+        OpenAll();
+
+        Transform[] allTransforms = Object.FindObjectsByType<Transform>(FindObjectsInactive.Exclude);
+        foreach (Transform t in allTransforms)
+        {
+            if (t == null)
+                continue;
+
+            string lowerName = t.name.ToLowerInvariant();
+            if (lowerName.Contains("door") || IsUnderNamedParent(t, "door"))
+                DisableDoorObject(t);
+        }
+
+        return true;
+    }
+    static bool IsUnderNamedParent(Transform t, string namePart)
+    {
+        Transform current = t.parent;
+        while (current != null)
+        {
+            if (current.name.ToLowerInvariant().Contains(namePart))
+                return true;
+            current = current.parent;
+        }
+        return false;
+    }
+
+    static void DisableDoorObject(Transform root)
+    {
+        var renderers = root.GetComponentsInChildren<Renderer>();
+        foreach (var renderer in renderers)
+            if (renderer != null) renderer.enabled = false;
+
+        var colliders = root.GetComponentsInChildren<Collider>();
+        foreach (var collider in colliders)
+            if (collider != null) collider.enabled = false;
+
+        var animators = root.GetComponentsInChildren<Animator>();
+        foreach (var animator in animators)
+            if (animator != null) animator.enabled = false;
+    }
+    public static OpenableDoor FindNearest(Vector3 position, float maxDistance)
+    {
+        OpenableDoor best = null;
+        float bestDistance = maxDistance;
+        foreach (var door in allDoors)
+        {
+            if (door == null || door.IsOpen) continue;
+            float distance = Vector3.Distance(position, door.transform.position);
+            if (distance < bestDistance)
+            {
+                best = door;
+                bestDistance = distance;
+            }
+        }
+        return best;
+    }
+
+    public static void OpenAll()
+    {
+        foreach (var door in allDoors.ToArray())
+            if (door != null && !door.IsOpen)
+                door.Open();
+    }
+
     // Filled at spawn time with the actual door mesh pivots to rotate.
     public Transform[] doorPivots;
+    public Collider[] collidersToDisable;
+    public Renderer[] renderersToHide;
 
     public bool IsOpen => isOpen;
     bool isOpen = false;
     float currentAngle = 0f;
+    Quaternion[] closedRotations;
     const float openAngle = 90f;
     const float animSpeed = 150f; // degrees per second
 
@@ -853,13 +1396,33 @@ public class OpenableDoor : MonoBehaviour
         if (isOpen) return;
         isOpen = true;
 
-        // Disable our own collider so the player can walk through.
-        var col = GetComponent<Collider>();
-        if (col != null) col.enabled = false;
+        // Disable the real doorway colliders so the player can walk through.
+        var colliders = collidersToDisable != null && collidersToDisable.Length > 0
+            ? collidersToDisable
+            : GetComponentsInChildren<Collider>();
+        foreach (var col in colliders)
+            if (col != null) col.enabled = false;
+        HideDoorVisuals();
 
         // If no pivots were supplied, try to find door children automatically.
         if (doorPivots == null || doorPivots.Length == 0)
             doorPivots = FindDoorPivots();
+
+        closedRotations = new Quaternion[doorPivots.Length];
+        for (int i = 0; i < doorPivots.Length; i++)
+            closedRotations[i] = doorPivots[i] != null ? doorPivots[i].localRotation : Quaternion.identity;
+    }
+
+
+
+    void HideDoorVisuals()
+    {
+        var renderers = renderersToHide != null && renderersToHide.Length > 0
+            ? renderersToHide
+            : GetComponentsInChildren<Renderer>();
+
+        foreach (var renderer in renderers)
+            if (renderer != null) renderer.enabled = false;
     }
 
     Transform[] FindDoorPivots()
@@ -885,11 +1448,15 @@ public class OpenableDoor : MonoBehaviour
     {
         if (!isOpen || doorPivots == null) return;
         currentAngle = Mathf.MoveTowards(currentAngle, openAngle, animSpeed * Time.deltaTime);
-        foreach (var pivot in doorPivots)
+        for (int i = 0; i < doorPivots.Length; i++)
         {
+            Transform pivot = doorPivots[i];
             if (pivot == null) continue;
-            var e = pivot.localEulerAngles;
-            pivot.localEulerAngles = new Vector3(e.x, currentAngle, e.z);
+
+            Quaternion closedRotation = closedRotations != null && i < closedRotations.Length
+                ? closedRotations[i]
+                : pivot.localRotation;
+            pivot.localRotation = closedRotation * Quaternion.Euler(0f, currentAngle, 0f);
         }
     }
 }
