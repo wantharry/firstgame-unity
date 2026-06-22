@@ -15,6 +15,11 @@ public class PlayerController : MonoBehaviour
     public float coyoteTime = 0.12f;
     [Tooltip("How long a Space press is remembered until physics consumes it.")]
     public float jumpBufferTime = 0.18f;
+    [Tooltip("Half-size of the playable terrain on X/Z, with a small safety margin.")]
+    public float worldBoundary = 23f;
+    [Tooltip("Respawn the player if they fall below this height.")]
+    public float fallRespawnY = -6f;
+    public Vector3 respawnPosition = new Vector3(0f, 1.4f, 0f);
 
     private Rigidbody rb;
     private CharacterAnimator anim;
@@ -79,10 +84,38 @@ public class PlayerController : MonoBehaviour
             rb.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
         }
 
+        KeepInsideWorldBounds();
+
         // Hand the current planar movement to the animator so the character
         // can swing its limbs while the first-person camera owns facing.
         if (anim != null)
             anim.SetMovement(new Vector3(rb.linearVelocity.x, 0f, rb.linearVelocity.z));
+    }
+
+    void KeepInsideWorldBounds()
+    {
+        Vector3 position = rb.position;
+        if (position.y < fallRespawnY)
+        {
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+            rb.MovePosition(respawnPosition);
+            return;
+        }
+
+        float clampedX = Mathf.Clamp(position.x, -worldBoundary, worldBoundary);
+        float clampedZ = Mathf.Clamp(position.z, -worldBoundary, worldBoundary);
+        if (Mathf.Approximately(position.x, clampedX) && Mathf.Approximately(position.z, clampedZ))
+            return;
+
+        Vector3 velocity = rb.linearVelocity;
+        if ((position.x < -worldBoundary && velocity.x < 0f) || (position.x > worldBoundary && velocity.x > 0f))
+            velocity.x = 0f;
+        if ((position.z < -worldBoundary && velocity.z < 0f) || (position.z > worldBoundary && velocity.z > 0f))
+            velocity.z = 0f;
+
+        rb.linearVelocity = velocity;
+        rb.MovePosition(new Vector3(clampedX, position.y, clampedZ));
     }
 
     void OnCollisionStay(Collision collision)
