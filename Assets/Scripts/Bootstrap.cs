@@ -566,6 +566,9 @@ public class Bootstrap : MonoBehaviour
         Vector3 lookDir = (lookTarget - spawn).normalized;
         if (lookDir.sqrMagnitude > 0.001f)
             creep.transform.rotation = Quaternion.LookRotation(lookDir, Vector3.up);
+
+        var chaser = creep.AddComponent<CreepChaser>();
+        chaser.homePosition = spawn;
     }
 
 
@@ -1224,6 +1227,136 @@ public class FirstPersonCamera : MonoBehaviour
     }
 }
 
+public class CreepChaser : MonoBehaviour
+{
+    public Vector3 homePosition;
+    public float wakeDistance = 28f;
+    public float chaseSpeed = 2.9f;
+    public float turnSpeed = 7f;
+    public float catchDistance = 1.55f;
+    public float worldBoundary = 23f;
+    public float obstacleProbeDistance = 1.45f;
+    public float bodyRadius = 0.42f;
+    public float bodyHeight = 1.7f;
+
+    Transform target;
+    Rigidbody rb;
+    CapsuleCollider bodyCollider;
+    float nextScareTime;
+
+    void Awake()
+    {
+        if (homePosition == Vector3.zero)
+            homePosition = transform.position;
+
+        rb = GetComponent<Rigidbody>();
+        if (rb == null)
+            rb = gameObject.AddComponent<Rigidbody>();
+        rb.isKinematic = true;
+        rb.useGravity = false;
+        rb.freezeRotation = true;
+
+        bodyCollider = GetComponent<CapsuleCollider>();
+        if (bodyCollider == null)
+            bodyCollider = gameObject.AddComponent<CapsuleCollider>();
+        bodyCollider.radius = bodyRadius;
+        bodyCollider.height = bodyHeight;
+        bodyCollider.center = new Vector3(0f, bodyHeight * 0.5f, 0f);
+        bodyCollider.direction = 1;
+    }
+
+    void FixedUpdate()
+    {
+        if (target == null)
+        {
+            GameObject player = GameObject.FindGameObjectWithTag("Player");
+            if (player != null)
+                target = player.transform;
+        }
+        if (target == null)
+            return;
+
+        Vector3 toPlayer = target.position - rb.position;
+        toPlayer.y = 0f;
+        float distance = toPlayer.magnitude;
+        if (distance > wakeDistance || distance < 0.05f)
+            return;
+
+        Vector3 desiredDirection = toPlayer.normalized;
+        Vector3 moveDirection = FindClearDirection(desiredDirection);
+        RotateToward(moveDirection);
+
+        if (distance > catchDistance)
+        {
+            Vector3 nextPosition = rb.position + moveDirection * chaseSpeed * Time.fixedDeltaTime;
+            nextPosition.x = Mathf.Clamp(nextPosition.x, -worldBoundary, worldBoundary);
+            nextPosition.z = Mathf.Clamp(nextPosition.z, -worldBoundary, worldBoundary);
+            rb.MovePosition(nextPosition);
+        }
+        else if (Time.time >= nextScareTime)
+        {
+            nextScareTime = Time.time + 2.5f;
+            if (GameManager.Instance != null)
+                GameManager.Instance.ShowMessage("The creature is right behind you!");
+        }
+    }
+
+    Vector3 FindClearDirection(Vector3 desiredDirection)
+    {
+        if (!IsBlocked(desiredDirection, obstacleProbeDistance))
+            return desiredDirection;
+
+        Vector3 bestDirection = desiredDirection;
+        float bestClearance = -1f;
+        float[] angles = { -35f, 35f, -70f, 70f, -110f, 110f };
+        for (int i = 0; i < angles.Length; i++)
+        {
+            Vector3 candidate = Quaternion.Euler(0f, angles[i], 0f) * desiredDirection;
+            float clearance = GetClearance(candidate);
+            if (clearance > bestClearance)
+            {
+                bestClearance = clearance;
+                bestDirection = candidate;
+            }
+        }
+
+        return bestDirection.normalized;
+    }
+
+    bool IsBlocked(Vector3 direction, float distance)
+    {
+        return GetClearance(direction) < distance;
+    }
+
+    float GetClearance(Vector3 direction)
+    {
+        Vector3 bottom = rb.position + Vector3.up * 0.25f;
+        Vector3 top = rb.position + Vector3.up * (bodyHeight - 0.15f);
+        RaycastHit[] hits = Physics.CapsuleCastAll(bottom, top, bodyRadius * 0.85f, direction, obstacleProbeDistance, ~0, QueryTriggerInteraction.Ignore);
+        float closest = obstacleProbeDistance;
+        for (int i = 0; i < hits.Length; i++)
+        {
+            RaycastHit hit = hits[i];
+            if (hit.collider == null || hit.collider.transform.IsChildOf(transform))
+                continue;
+            if (target != null && hit.collider.transform.IsChildOf(target))
+                continue;
+
+            closest = Mathf.Min(closest, hit.distance);
+        }
+
+        return closest;
+    }
+
+    void RotateToward(Vector3 direction)
+    {
+        if (direction.sqrMagnitude < 0.001f)
+            return;
+
+        Quaternion lookRotation = Quaternion.LookRotation(direction.normalized, Vector3.up);
+        rb.MoveRotation(Quaternion.Slerp(rb.rotation, lookRotation, Time.fixedDeltaTime * turnSpeed));
+    }
+}
 public enum HideSpotType
 {
     Under,
